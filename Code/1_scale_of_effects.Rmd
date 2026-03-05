@@ -1,0 +1,162 @@
+---
+Title: Scale of Effects Analysis
+Author: Isabelle LT
+Created: 2024-10-20
+Inputs: ../Data/merged_covariates.csv, ../Data/richness.csv, ../Data/Climate GDD and PET.csv, ../Data/Landscape metrics scaled.rds
+Outputs: Optimal scale-of-effect results for each landscape metric
+Description: Fits negative binomial GLMMs across a grid of response distances and landscape extents to identify the scale of effect for each landscape configuration metric. For each combination, the focal metric's coefficient, p-value, R-squared, and AIC are extracted. Optimal scales are then selected based on statistical significance.
+---
+
+```{R Set up environment}
+library(MuMIn)
+library(mgcv)
+library(glmmTMB)
+library(tidyverse)
+library(DHARMa)
+source("utils.R")
+```
+
+```{R Load Data}
+survey_year_df <- read_csv(file = "../Data/survey_year.csv")
+
+richness <- read_csv(file = "../Data/richness_dist.csv")
+
+climate_variables <- read.csv(file = "../Data/Climate GDD.csv")
+
+climate_variables_scaled <- climate_variables %>%
+  mutate(across(c(pet:gdd), ~ scale(., center = TRUE, scale = TRUE)))
+
+landscape_metrics_all <- readRDS("../Data/Landscape metrics scaled.rds")
+```
+
+
+```{R Flexible modeling framework}
+analyze_scale_effects <- function(richness_data,
+                                  landscape_data,
+                                  focal_metric,
+                                  extent_increments = 2,
+                                  response_distances = seq(50, 350, by = 25),
+                                  survey_year_df, climate_df,
+                                  control_vars = TRUE) {
+  results_list <- list()
+  models_list <- list()
+
+  for (resp_dist in response_distances) {
+    rich_filtered <- filter_richness_data(resp_dist, richness_data)
+
+    landscape_focal_data <- landscape_data %>%
+      dplyr::select(location, distance_int, focal_metric, upland_prop)
+
+    landscape_metrics_df <- land_metrics_single_obs_multi_landscape_extents(
+      landscape_focal_data,
+      resp_dist,
+      rich_filtered,
+      survey_year_df, climate_variables_scaled
+    )
+
+    extents <- sort(unique(landscape_metrics_df$distance_int))
+    extents_nth <- extents[seq(1, length(extents), by = extent_increments)]
+
+    models_list[[as.character(resp_dist)]] <- list()
+    extent_results <- data.frame()
+
+    for (extent in extents_nth) {
+      current_extent_data <- landscape_metrics_df %>%
+        dplyr::filter(distance_int == extent)
+
+      current_extent_data$survey_year <- as.factor(current_extent_data$survey_year)
+      current_extent_data_coords <- current_extent_data %>%
+        inner_join(survey_year_df %>%
+          select(location, latitude, longitude), by = "location")
+
+      tryCatch(
+        {
+          formula_string <- paste("richness ~", focal_metric, "+ upland_prop + gdd")
+
+          model <- glmmTMB(as.formula(formula_string),
+            data = current_extent_data_coords, family = nbinom2,
+            control = glmmTMBControl(optimizer = optim, optArgs = list(method = "BFGS"))
+          )
+
+          coef_data <- summary(model)$coefficients
+
+          focal_coef <- coef_data$cond[focal_metric, ]
+
+          extent_results <- rbind(extent_results, data.frame(
+            response_distance = resp_dist,
+            landscape_extent = extent,
+            estimate = focal_coef[1],
+            std_error = focal_coef[2],
+            t_value = focal_coef[3],
+            p_value = focal_coef[4],
+            r_squared = suppressWarnings(r.squaredGLMM(model)["trigamma", "R2m"]),
+            aic = AIC(model)
+          ))
+        },
+        error = function(e) {
+          print(paste("Error occurred for extent", extent, ":", e$message))
+        }
+      )
+    }
+    results_list[[as.character(resp_dist)]] <- extent_results
+    models_list[[as.character(resp_dist)]] <- model
+  }
+
+  return(list(
+    results = results_list,
+    models = models_list
+  ))
+}
+
+# Function to identify optimal scales
+find_optimal_scales <- function(scale_results,
+                                criterion = c("significance", "r_squared", "aic"),
+                                alpha = 0.1) {
+  optimal_scales <- data.frame()
+
+  for (resp_dist in names(scale_results$results)) {
+    results <- scale_results$results[resp_dist][[resp_dist]]
+
+    if (criterion == "significance") {
+      # Get all significant scales and sort by effect size
+      significant_scales <- results[results$p_value < alpha, ]
+
+      if (nrow(significant_scales) > 0) {
+        significant_scales <- significant_scales[order(abs(significant_scales$estimate), decreasing = TRUE), ]
+        optimal_scales <- rbind(optimal_scales, significant_scales)
+      } else {
+        # If none significant, take strongest effect
+        optimal <- results[which.max(abs(results$estimate)), ]
+        optimal_scales <- rbind(optimal_scales, optimal)
+      }
+    } else if (criterion == "r_squared") {
+      optimal <- results[which.max(results$r_squared), ]
+      optimal_scales <- rbind(optimal_scales, optimal)
+    } else if (criterion == "aic") {
+      optimal <- results[which.min(results$aic), ]
+      optimal_scales <- rbind(optimal_scales, optimal)
+    }
+  }
+
+  return(optimal_scales)
+}
+```
+
+```{R Fit models}
+# Run analysis
+analysis_results_metric <- analyze_scale_effects(
+  richness_data = richness,
+  landscape_data = landscape_metrics_all,
+  focal_metric = "cai_cv",
+  extent_increment = 5,
+  response_distances = seq(50, 350, by = 25),
+  survey_year_df = survey_year_df,
+  climate_df = climate_variables_scaled,
+  control_vars = TRUE
+)
+
+# Check residuals
+simulateResiduals(analysis_results_metric$model[["225"]], plot = T)
+
+optimal_metric <- find_optimal_scales(analysis_results_metric, criterion = "significance", alpha = 0.1)
+```

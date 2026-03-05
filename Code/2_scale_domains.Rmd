@@ -1,0 +1,208 @@
+---
+Title: Scale Domain Analysis
+Author: Isabelle LT
+Created: 2024-11-27
+Inputs: ../Data/scale_of_effect_final_models.csv
+Outputs: HGAM model of scale relationships, first derivative plots identifying domain transitions
+Description: Uses a hierarchical GAM (HGAM) to model how the optimal landscape extent varies with response extent across landscape configuration metrics. First derivatives with simulation-based confidence intervals are used to identify domain transitions where the scale relationship changes.
+---
+
+```{R Load environment}
+library(mvtnorm)
+library(MuMIn)
+library(car)
+library(corrplot)
+library(ggpubr)
+library(cowplot)
+library(mgcv)
+library(glue)
+library(segmented)
+library(tidyverse)
+library(patchwork)
+library(gratia)
+library(marginaleffects)
+```
+
+```{R Load data}
+# Scale of effect results from 1_scale_of_effects analysis
+model_table <- read_csv("../Data/scale_of_effect_final_models.csv")
+```
+
+```{R HGAM}
+# Filter to only additive models (excluding interaction models)
+# and create the necessary dataframes
+edge_df <- model_table %>%
+  filter(metric == "edge", type == "add") %>%
+  dplyr::select(response_area_ha, metric_extent_ha) %>%
+  rename(
+    response_extent = response_area_ha,
+    landscape_extent = metric_extent_ha
+  ) %>%
+  mutate(landscape_metric = "Edge density")
+
+pafrac_df <- model_table %>%
+  filter(metric == "pafrac", type == "add") %>%
+  dplyr::select(response_area_ha, metric_extent_ha) %>%
+  rename(
+    response_extent = response_area_ha,
+    landscape_extent = metric_extent_ha
+  ) %>%
+  mutate(landscape_metric = "PAFRAC")
+
+contag_df <- model_table %>%
+  filter(metric == "contag", type == "add") %>%
+  dplyr::select(response_area_ha, metric_extent_ha) %>%
+  rename(
+    response_extent = response_area_ha,
+    landscape_extent = metric_extent_ha
+  ) %>%
+  mutate(landscape_metric = "CONTAG")
+
+cai_cv_df <- model_table %>%
+  filter(metric == "cai_cv", type == "add") %>%
+  dplyr::select(response_area_ha, metric_extent_ha) %>%
+  rename(
+    response_extent = response_area_ha,
+    landscape_extent = metric_extent_ha
+  ) %>%
+  mutate(landscape_metric = "CAI CV")
+
+shdi_df <- model_table %>%
+  filter(metric == "shdi", type == "add") %>%
+  dplyr::select(response_area_ha, metric_extent_ha) %>%
+  rename(
+    response_extent = response_area_ha,
+    landscape_extent = metric_extent_ha
+  ) %>%
+  mutate(landscape_metric = "Shannon diversity")
+
+# Combine all dataframes into a single long format dataframe
+long_df <- bind_rows(edge_df, pafrac_df, contag_df, cai_cv_df, shdi_df) %>%
+  dplyr::select(landscape_extent, response_extent, landscape_metric)
+
+long_df$landscape_metric <- as.factor(long_df$landscape_metric)
+hgam_model <- gam(
+  landscape_extent ~ s(response_extent, by = landscape_metric, bs = "fs", m = 2, k = 4) +
+    s(landscape_metric, bs = "re"),
+  data = long_df, method = "REML"
+)
+
+domain_lines <- data.frame(
+  landscape_metric = c("CAI CV", "CONTAG", "PAFRAC", "Shannon diversity"),
+  xintercept = c(14, 11, 13, 13)
+)
+
+model_I <- marginaleffects::plot_predictions(hgam_model,
+  condition = c("response_extent", "landscape_metric", "landscape_metric"),
+  points = 0.5,
+  rug = FALSE
+) +
+  geom_vline(
+    data = domain_lines,
+    aes(xintercept = xintercept),
+    linetype = "dotted", colour = "grey50"
+  ) +
+  labs(
+    x = "Response extent (ha)",
+    y = "Configuration metric landscape extent (ha)"
+  ) +
+  coord_cartesian(ylim = c(0, 90)) +
+  theme_bw() +
+  theme(
+    panel.grid = element_blank(),
+    panel.background = element_blank(),
+    axis.text.x = element_text(size = 12),
+    axis.text.y = element_text(size = 12),
+    axis.title = element_text(size = 14),
+    strip.text = element_text(size = 12),
+    legend.position = "none"
+  )
+```
+
+
+```{R Derivatives for inflection points}
+# Quantify inflection points using derivatives
+metric_name <- "Edge density"
+subset_data <- long_df %>% filter(landscape_metric == metric_name)
+
+# Create prediction dataset
+newdat <- data.frame(
+  response_extent = seq(min(subset_data$response_extent),
+    max(subset_data$response_extent),
+    length.out = 200
+  ),
+  landscape_metric = metric_name
+)
+
+# Create datasets shifted by epsilon for numerical differentiation
+eps <- 1 # Step size is 1 ha to anchor in spatial ecology realism
+newdat_p_eps <- newdat %>% mutate(response_extent = response_extent + eps)
+newdat_m_eps <- newdat %>% mutate(response_extent = response_extent - eps)
+
+# Get linear predictor matrices
+sim_lp <- predict(hgam_model, newdata = newdat, type = "lpmatrix")
+sim_lp_p <- predict(hgam_model, newdata = newdat_p_eps, type = "lpmatrix")
+sim_lp_m <- predict(hgam_model, newdata = newdat_m_eps, type = "lpmatrix")
+
+# Generate coefficient simulations
+n_sim <- 1000
+set.seed(42)
+sim_coef <- rmvnorm(n_sim, coef(hgam_model), vcov(hgam_model, unconditional = TRUE))
+
+# Calculate predictions for each simulation
+pred_original <- sim_lp %*% t(sim_coef)
+pred_p_eps <- sim_lp_p %*% t(sim_coef)
+pred_m_eps <- sim_lp_m %*% t(sim_coef)
+
+# Calculate derivatives
+first_derivative <- (pred_p_eps - pred_m_eps) / (2 * eps)
+second_derivative <- (pred_p_eps - 2 * pred_original + pred_m_eps) / (eps^2)
+
+# Summarize across simulations
+newdat$first_deriv_median <- apply(first_derivative, 1, median)
+newdat$first_deriv_lower <- apply(first_derivative, 1, quantile, 0.025)
+newdat$first_deriv_upper <- apply(first_derivative, 1, quantile, 0.975)
+newdat$second_deriv_median <- apply(second_derivative, 1, median)
+newdat$second_deriv_lower <- apply(second_derivative, 1, quantile, 0.025)
+newdat$second_deriv_upper <- apply(second_derivative, 1, quantile, 0.975)
+
+# Identify where first derivative CI excludes zero on both sides of a boundary
+domain_boundaries <- newdat %>%
+  arrange(response_extent) %>%
+  mutate(
+    sig_positive = first_deriv_lower > 0,
+    sig_negative = first_deriv_upper < 0,
+    not_sig = first_deriv_lower <= 0 & first_deriv_upper >= 0,
+    domain_change = sig_positive != lag(sig_positive) |
+      sig_negative != lag(sig_negative) |
+      not_sig != lag(not_sig)
+  ) %>%
+  filter(domain_change == TRUE)
+
+# Domain transition values (ha) for each metric
+domain_transitions <- c(
+  "CAI CV" = 14,
+  "CONTAG" = 11,
+  "PAFRAC" = 13,
+  "Shannon diversity" = 13
+)
+
+# Plot first derivative
+first_der_plot <- ggplot(newdat, aes(x = response_extent)) +
+  geom_ribbon(aes(ymin = first_deriv_lower, ymax = first_deriv_upper), alpha = 0.2) +
+  geom_line(aes(y = first_deriv_median)) +
+  geom_hline(yintercept = 0, linetype = "solid") +
+  {
+    if (metric_name %in% names(domain_transitions)) geom_vline(xintercept = domain_transitions[[metric_name]], linetype = "dotted", colour = "grey50", linewidth = 1.2)
+  } +
+  labs(
+    x = "Response extent (ha)",
+    y = glue(metric_name, " first derivative")
+  ) +
+  theme_minimal() +
+  theme(
+    panel.grid = element_blank(),
+    axis.text = element_text(size = 16),
+    axis.title = element_text(size = 18)
+  )
+```
