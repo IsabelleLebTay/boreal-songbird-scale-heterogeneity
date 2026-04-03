@@ -7,7 +7,7 @@ Dataset archived on Borealis: https://doi.org/10.5683/SP3/RZ5DUQ
 
 **Authors:**
 - Isabelle Lebeuf-Taylor (corresponding author), Department of Biological Sciences, University of Alberta, Edmonton, Alberta, Canada. lebeufta@ualberta.ca. ORCID: 0000-0001-6809-7249
-- Juan Andres Martinez Lanfranco, Department of Biological Sciences, University of Alberta, Edmonton, Alberta, Canada
+- Juan Andrés Martínez Lanfranco, Department of Biological Sciences, University of Alberta, Edmonton, Alberta, Canada
 - Erin Bayne, Department of Biological Sciences, University of Alberta, Edmonton, Alberta, Canada
 
 **Date of data collection:** 2014–2023
@@ -16,7 +16,7 @@ Dataset archived on Borealis: https://doi.org/10.5683/SP3/RZ5DUQ
 
 **Funding sources:** Alberta Pacific Forest Industries Inc. matched by Mitacs Accelerate (IT34177), Forest Research Improvement Alliance of Alberta (FRIAA), Natural Sciences and Engineering Research Council of Canada (NSERC), Northern Scientific Training Program (NSTP), University of Alberta Northern Research Awards (UANRA)
 
-**Associated publication:** Lebeuf-Taylor I, Martinez Lanfranco JA, Bayne E. Configurational heterogeneity drives songbird diversity at distinct spatial scales in managed boreal forests. *Landscape Ecology*. [under review]
+**Associated publication:** Lebeuf-Taylor I, Martinez Lanfranco JA, Bayne E. Configurational heterogeneity drives songbird diversity at distinct spatial scales in managed boreal forests. *Landscape Ecology* (2026) https://doi.org/10.1007/s10980-026-02341-y
 
 **Code repository:** https://github.com/IsabelleLebTay/boreal-songbird-scale-heterogeneity.git
 
@@ -112,7 +112,7 @@ All analyses were performed in R (R Core Team 2024). Key packages:
 
 ## Reproduction
 
-1. Clone the repository or download from Dryad
+1. Clone the repository or download from Borealis
 2. Place data files in a `Data/` directory relative to the code files
 3. Run `1_scale_of_effects.Rmd` to generate scale-of-effect results
 4. Run `2_scale_domains.Rmd` to fit HGAMs and identify domain boundaries
